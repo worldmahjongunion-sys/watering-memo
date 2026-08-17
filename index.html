@@ -202,23 +202,39 @@ function sorted(){
 /* ===== 今日あげる鉢 ===== */
 function renderTodo(){
   var el=document.getElementById('todo');
-  if(!todayW()){el.innerHTML='';return;}
-  var due=sorted().filter(function(x){return x.s.kind==='due';});
-  var none=sorted().filter(function(x){return x.s.kind==='none';}).length;
-  var html='<div class="todo"><p class="label">今日あげる鉢</p>';
-  if(due.length===0){html+='<p class="rest">今日はお休みで大丈夫です。</p>';}
-  else{
-    due.forEach(function(x){
+  if(S.pots.length===0){el.innerHTML='';return;}
+
+  var all=sorted();
+  var due=all.filter(function(x){return x.s.kind==='due';});
+  var none=all.filter(function(x){return x.s.kind==='none';});
+  var soon=all.filter(function(x){return x.s.kind==='wait'&&x.s.left===1;});
+  var rows=due.concat(none);
+
+  var html='<div class="todo"><p class="label">今日あげる鉢'+
+    (rows.length?'（'+rows.length+'つ）':'')+'</p>';
+
+  if(rows.length===0){
+    html+='<p class="rest">今日はお休みで大丈夫です。</p>';
+  }else{
+    rows.forEach(function(x){
+      var note=(x.s.kind==='none')?'まだ記録がありません':'前回から'+x.s.days+'日';
       html+='<div class="todo-row"><div><span class="todo-name"></span>'+
-        '<span class="todo-since">前回から'+x.s.days+'日</span></div>'+
+        '<span class="todo-since">'+note+'</span></div>'+
         '<button class="mini" data-go="'+x.p.id+'">あげた</button></div>';
     });
   }
-  if(none>0){html+='<p class="wsay">まだ記録のない鉢が '+none+' つあります。</p>';}
+
+  if(soon.length>0){
+    html+='<p class="wsay">明日は '+soon.length+' つあげる日です。</p>';
+  }
+  if(!todayW()){
+    html+='<p class="wsay">天気を選ぶと、雨や暑さに合わせて調整します。</p>';
+  }
   html+='</div>';
+
   el.innerHTML=html;
   var names=el.querySelectorAll('.todo-name');
-  due.forEach(function(x,i){if(names[i])names[i].textContent=x.p.name;});
+  rows.forEach(function(x,i){if(names[i])names[i].textContent=x.p.name;});
 }
 
 /* ===== 鉢一覧 ===== */
@@ -261,8 +277,9 @@ function renderPots(){
           '<div class="field"><label>写真</label><span class="photo-btn" data-photo="'+p.id+'">'+(p.photo?'撮り直す':'写真をつける')+'</span></div>'+
           '<div class="field"><label>名前しらべ</label>'+
             (p.photo
-              ? '<span class="photo-btn'+(p.busy?' busy':'')+'" data-ai="'+p.id+'">'+(p.busy?'調べています…':'写真から名前を調べる')+'</span>'
-              : '<span class="sub" style="font-size:13px">先に写真をつけてください</span>')+
+              ? '<span class="photo-btn'+(p.busy?' busy':'')+'" data-ai="'+p.id+'">'+(p.busy?'調べています…':'写真から名前を調べる')+'</span> '
+              : '')+
+            '<span class="photo-btn'+(p.busy?' busy':'')+'" data-ain="'+p.id+'">'+(p.busy?'調べています…':'この名前で育て方を調べ直す')+'</span>'+
           '</div>'+
           aiBox(p)+
           '<button class="del" data-del="'+p.id+'">この鉢を消す</button>'+
@@ -296,6 +313,28 @@ function aiBox(p){
   return '<div class="ai-box"><h4>'+esc(a.name)+also+'</h4>'+
     (conf?'<p class="conf">'+conf+'。ちがっていたら名前は自分で直せます</p>':'')+
     (d?'<dl>'+d+'</dl>':'')+use+'</div>';
+}
+
+function askAIName(id){
+  var p=find(id); if(!p||p.busy)return;
+  var nm=(p.name||'').trim();
+  if(!nm){p.aiErr='先に名前を入れてください。';renderPots();return;}
+  p.busy=true; delete p.aiErr; renderPots();
+
+  fetch(AI_URL,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:nm})})
+  .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+  .then(function(res){
+    delete p.busy;
+    if(!res.ok||res.j.error){ p.aiErr='うまく調べられませんでした。'+(res.j.error||''); }
+    else { p.ai=res.j; delete p.aiErr; }
+    save(); renderPots();
+  })
+  .catch(function(){
+    delete p.busy;
+    p.aiErr='つながりませんでした。電波を確認してもう一度お試しください。';
+    renderPots();
+  });
 }
 
 function askAI(id){
@@ -335,6 +374,7 @@ document.body.addEventListener('click',function(e){
     if(confirm('「'+p3.name+'」を消します。よろしいですか。')){S.pots=S.pots.filter(function(q){return q.id!==v;});editing=null;save();renderAll();}}
   else if((v=t.getAttribute('data-photo'))){photoTarget=v;document.getElementById('fileIn').click();}
   else if((v=t.getAttribute('data-ai'))){askAI(v);}
+  else if((v=t.getAttribute('data-ain'))){askAIName(v);}
   else if((v=t.getAttribute('data-aiuse'))){var p4=find(v);
     if(p4.ai){ if(p4.ai.name)p4.name=p4.ai.name;
       var n=Number(p4.ai.intervalDays); if(n>0&&n<=60)p4.interval=n; }
