@@ -71,6 +71,15 @@
   .toggle button.on{background:var(--soil);border-color:var(--soil);color:#fff;font-weight:600}
   .del{background:none;border:none;color:var(--dry);font-size:14px;font-family:inherit;text-decoration:underline;cursor:pointer;padding:0}
   .photo-btn{display:inline-block;padding:9px 14px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--muted);font-size:14px;cursor:pointer}
+  .photo-btn.busy{opacity:.55}
+  .ai-box{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:11px}
+  .ai-box h4{margin:0 0 3px;font-size:16px;color:var(--ink)}
+  .ai-box .conf{font-size:12px;color:var(--muted);margin:0 0 8px}
+  .ai-box dl{margin:0 0 9px}
+  .ai-box dt{font-size:12px;color:var(--muted);margin-top:6px}
+  .ai-box dd{margin:1px 0 0;font-size:14px;line-height:1.6}
+  .ai-use{width:100%;padding:10px;border:none;border-radius:9px;background:var(--soil);color:#fff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer}
+  .ai-err{color:var(--dry);font-size:13px;margin:0}
 
   .add h2{font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;font-size:17px;margin:0 0 10px;font-weight:600}
   .addbtn{width:100%;padding:13px;border:none;border-radius:11px;background:var(--soil);color:#fff;font-size:16px;font-weight:600;font-family:inherit;cursor:pointer}
@@ -125,6 +134,8 @@
 <script>
 /* ===== 保存 ===== */
 var KEY='mizuyari-v1', mem=null;
+/* 植物しらべ中継サーバー */
+var AI_URL='https://plant-ai.world-mahjong-union.workers.dev';
 function load(){try{var r=localStorage.getItem(KEY);if(r)return JSON.parse(r);}catch(e){}
   return mem||{pots:[],weather:null};}
 function save(){mem=S;try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){
@@ -240,6 +251,12 @@ function renderPots(){
             [1,2,3,4,5,6,7,10,14,21].map(function(v){return '<option value="'+v+'"'+(p.interval===v?' selected':'')+'>'+v+'日おき</option>';}).join('')+
           '</select></div>'+
           '<div class="field"><label>写真</label><span class="photo-btn" data-photo="'+p.id+'">'+(p.photo?'撮り直す':'写真をつける')+'</span></div>'+
+          '<div class="field"><label>名前しらべ</label>'+
+            (p.photo
+              ? '<span class="photo-btn'+(p.busy?' busy':'')+'" data-ai="'+p.id+'">'+(p.busy?'調べています…':'写真から名前を調べる')+'</span>'
+              : '<span class="sub" style="font-size:13px">先に写真をつけてください</span>')+
+          '</div>'+
+          aiBox(p)+
           '<button class="del" data-del="'+p.id+'">この鉢を消す</button>'+
         '</div>':'')+
       '<div class="lead">'+lead+'</div><div class="dots">'+dots+'</div>'+
@@ -250,6 +267,48 @@ function renderPots(){
     el.querySelector('.name').textContent=p.name;
     var ni=el.querySelector('[data-name]'); if(ni)ni.value=p.name;
     box.appendChild(el);
+  });
+}
+
+/* ===== 植物しらべ ===== */
+function esc(t){return String(t==null?'':t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function aiBox(p){
+  if(p.aiErr) return '<p class="ai-err">'+esc(p.aiErr)+'</p>';
+  var a=p.ai; if(!a) return '';
+  var conf={high:'たぶん合っています',medium:'似た種類かもしれません',low:'自信は低めです'}[a.confidence]||'';
+  var also=(a.alsoKnownAs&&a.alsoKnownAs.length)?'（別名：'+esc(a.alsoKnownAs.join('、'))+'）':'';
+  var d='';
+  if(a.water) d+='<dt>水やり</dt><dd>'+esc(a.water)+'</dd>';
+  if(a.light) d+='<dt>置き場所</dt><dd>'+esc(a.light)+'</dd>';
+  if(a.notes) d+='<dt>気をつけること</dt><dd>'+esc(a.notes)+'</dd>';
+  var n=Number(a.intervalDays);
+  var use=(a.name&&a.name!=='判定できませんでした')
+    ? '<button class="ai-use" data-aiuse="'+p.id+'">この名前にする'+(n>0?'（'+n+'日おき）':'')+'</button>' : '';
+  return '<div class="ai-box"><h4>'+esc(a.name)+also+'</h4>'+
+    (conf?'<p class="conf">'+conf+'。ちがっていたら名前は自分で直せます</p>':'')+
+    (d?'<dl>'+d+'</dl>':'')+use+'</div>';
+}
+
+function askAI(id){
+  var p=find(id); if(!p||!p.photo||p.busy)return;
+  var m=/^data:(image\/[a-z]+);base64,(.+)$/.exec(p.photo);
+  if(!m){p.aiErr='写真を読み取れませんでした。撮り直してください。';renderPots();return;}
+  p.busy=true; delete p.aiErr; renderPots();
+
+  fetch(AI_URL,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mimeType:m[1],imageBase64:m[2]})})
+  .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+  .then(function(res){
+    delete p.busy;
+    if(!res.ok||res.j.error){ p.aiErr='うまく調べられませんでした。'+(res.j.error||''); }
+    else { p.ai=res.j; delete p.aiErr; }
+    save(); renderPots();
+  })
+  .catch(function(){
+    delete p.busy;
+    p.aiErr='つながりませんでした。電波を確認してもう一度お試しください。';
+    renderPots();
   });
 }
 
@@ -267,6 +326,11 @@ document.body.addEventListener('click',function(e){
   else if((v=t.getAttribute('data-del'))){var p3=find(v);
     if(confirm('「'+p3.name+'」を消します。よろしいですか。')){S.pots=S.pots.filter(function(q){return q.id!==v;});editing=null;save();renderAll();}}
   else if((v=t.getAttribute('data-photo'))){photoTarget=v;document.getElementById('fileIn').click();}
+  else if((v=t.getAttribute('data-ai'))){askAI(v);}
+  else if((v=t.getAttribute('data-aiuse'))){var p4=find(v);
+    if(p4.ai){ if(p4.ai.name)p4.name=p4.ai.name;
+      var n=Number(p4.ai.intervalDays); if(n>0&&n<=60)p4.interval=n; }
+    save(); renderAll();}
 });
 
 document.body.addEventListener('change',function(e){
@@ -312,6 +376,7 @@ document.getElementById('fileIn').addEventListener('change',function(e){
       c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
       c.getContext('2d').drawImage(img,0,0,c.width,c.height);
       pot.photo=c.toDataURL('image/jpeg',0.7);
+      delete pot.ai; delete pot.aiErr;
       save(); renderPots();
     };
     img.src=fr.result;
