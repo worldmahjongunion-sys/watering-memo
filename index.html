@@ -81,6 +81,8 @@
   .ai-use{width:100%;padding:10px;border:none;border-radius:9px;background:var(--soil);color:#fff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer}
   .ai-err{color:var(--dry);font-size:13px;margin:0}
 
+  .add label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
+  .add .thumb-row{display:flex;align-items:center;gap:10px}
   .add h2{font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;font-size:17px;margin:0 0 10px;font-weight:600}
   .addbtn{width:100%;padding:13px;border:none;border-radius:11px;background:var(--soil);color:#fff;font-size:16px;font-weight:600;font-family:inherit;cursor:pointer}
   .empty{text-align:center;color:var(--muted);padding:24px 10px}
@@ -106,6 +108,12 @@
   <div class="box add">
     <h2>鉢を増やす</h2>
     <div class="field" style="margin-bottom:10px">
+      <label>写真から始める</label>
+      <div id="newShot"></div>
+      <div id="newAiBox"></div>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label>名前</label>
       <input type="text" id="newName" placeholder="鉢の名前（例：玄関のカポック）">
     </div>
     <div class="toggle" id="newWhere" style="margin-bottom:10px">
@@ -344,6 +352,74 @@ document.body.addEventListener('input',function(e){
     renderTodo();}
 });
 
+/* ===== 新規登録：写真から始める ===== */
+var newPhoto=null, newAI=null, newBusy=false, newErr=null;
+
+function renderNewBox(){
+  var shot=document.getElementById('newShot');
+  var box=document.getElementById('newAiBox');
+
+  shot.innerHTML = newPhoto
+    ? '<div class="thumb-row"><img class="thumb" src="'+newPhoto+'" alt="">'+
+      '<span class="photo-btn'+(newBusy?' busy':'')+'" id="newShotBtn">'+(newBusy?'調べています…':'撮り直す')+'</span></div>'
+    : '<span class="photo-btn" id="newShotBtn">写真をとって名前を調べる</span>';
+
+  if(newBusy){ box.innerHTML=''; return; }
+  if(newErr){ box.innerHTML='<p class="ai-err">'+esc(newErr)+'</p>'; return; }
+  if(!newAI){ box.innerHTML=''; return; }
+
+  var a=newAI;
+  var conf={high:'たぶん合っています',medium:'似た種類かもしれません',low:'自信は低めです'}[a.confidence]||'';
+  var also=(a.alsoKnownAs&&a.alsoKnownAs.length)?'（別名：'+esc(a.alsoKnownAs.join('、'))+'）':'';
+  var d='';
+  if(a.water) d+='<dt>水やり</dt><dd>'+esc(a.water)+'</dd>';
+  if(a.light) d+='<dt>置き場所</dt><dd>'+esc(a.light)+'</dd>';
+  if(a.notes) d+='<dt>気をつけること</dt><dd>'+esc(a.notes)+'</dd>';
+  box.innerHTML='<div class="ai-box"><h4>'+esc(a.name)+also+'</h4>'+
+    (conf?'<p class="conf">'+conf+'。下の名前の欄でいつでも直せます</p>':'')+
+    (d?'<dl>'+d+'</dl>':'')+'</div>';
+}
+
+function askAINew(){
+  var m=/^data:(image\/[a-z]+);base64,(.+)$/.exec(newPhoto||'');
+  if(!m){newErr='写真を読み取れませんでした。撮り直してください。';renderNewBox();return;}
+  newBusy=true; newErr=null; newAI=null; renderNewBox();
+
+  fetch(AI_URL,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mimeType:m[1],imageBase64:m[2]})})
+  .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+  .then(function(res){
+    newBusy=false;
+    if(!res.ok||res.j.error){ newErr='うまく調べられませんでした。名前は手で入れてください。'; }
+    else{
+      newAI=res.j;
+      var nm=document.getElementById('newName');
+      if(newAI.name && newAI.name!=='判定できませんでした' && !nm.value.trim()) nm.value=newAI.name;
+      var n=Number(newAI.intervalDays), sel=document.getElementById('newInterval');
+      if(n>0){
+        var best=null;
+        Array.prototype.forEach.call(sel.options,function(o){
+          var v=Number(o.value);
+          if(best===null||Math.abs(v-n)<Math.abs(best-n)) best=v;
+        });
+        if(best!==null) sel.value=String(best);
+      }
+    }
+    renderNewBox();
+  })
+  .catch(function(){
+    newBusy=false;
+    newErr='つながりませんでした。名前は手で入れてください。';
+    renderNewBox();
+  });
+}
+
+document.getElementById('newShot').addEventListener('click',function(e){
+  if(e.target.id!=='newShotBtn'||newBusy)return;
+  photoTarget='__new__';
+  document.getElementById('fileIn').click();
+});
+
 /* 追加 */
 var newWhere='indoor';
 document.getElementById('newWhere').addEventListener('click',function(e){
@@ -354,9 +430,14 @@ document.getElementById('newWhere').addEventListener('click',function(e){
 document.getElementById('addBtn').addEventListener('click',function(){
   var i=document.getElementById('newName'), name=i.value.trim();
   if(!name){i.focus();return;}
-  S.pots.push({id:'p'+Date.now(),name:name,where:newWhere,
-    interval:Number(document.getElementById('newInterval').value)});
-  i.value=''; save(); renderAll();
+  var pot={id:'p'+Date.now(),name:name,where:newWhere,
+    interval:Number(document.getElementById('newInterval').value)};
+  if(newPhoto) pot.photo=newPhoto;
+  if(newAI) pot.ai=newAI;
+  S.pots.push(pot);
+  i.value=''; newPhoto=null; newAI=null; newErr=null;
+  document.getElementById('newInterval').value='3';
+  renderNewBox(); save(); renderAll();
 });
 document.getElementById('newName').addEventListener('keydown',function(e){
   if(e.key==='Enter')document.getElementById('addBtn').click();});
@@ -366,7 +447,8 @@ var photoTarget=null;
 document.getElementById('fileIn').addEventListener('change',function(e){
   var f=e.target.files&&e.target.files[0]; e.target.value='';
   if(!f||!photoTarget)return;
-  var pot=find(photoTarget);
+  var forNew=(photoTarget==='__new__');
+  var pot=forNew?null:find(photoTarget);
   var fr=new FileReader();
   fr.onload=function(){
     var img=new Image();
@@ -375,7 +457,9 @@ document.getElementById('fileIn').addEventListener('change',function(e){
       var c=document.createElement('canvas');
       c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
       c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      pot.photo=c.toDataURL('image/jpeg',0.7);
+      var url=c.toDataURL('image/jpeg',0.7);
+      if(forNew){ newPhoto=url; newAI=null; newErr=null; renderNewBox(); askAINew(); return; }
+      pot.photo=url;
       delete pot.ai; delete pot.aiErr;
       save(); renderPots();
     };
@@ -385,6 +469,7 @@ document.getElementById('fileIn').addEventListener('change',function(e){
 });
 
 renderAll();
+renderNewBox();
 </script>
 </body>
 </html>
