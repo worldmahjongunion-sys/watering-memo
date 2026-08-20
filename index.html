@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>水やりメモ</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2E6F8E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="水やりメモ">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
   :root{
     --bg:#EDF1EC; --card:#fff; --ink:#1E2A22; --muted:#5E6D62; --line:#D5DCD4;
@@ -27,6 +32,15 @@
   .wbtn{flex:1;padding:11px 2px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--muted);font-size:15px;font-family:inherit;cursor:pointer}
   .wbtn.on{background:var(--water);border-color:var(--water);color:#fff;font-weight:600}
   .wsay{font-size:14px;color:var(--muted);margin:8px 0 0}
+  .placeline{font-size:14px;color:var(--muted);margin:0 0 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .placeline b{color:var(--ink);font-weight:600}
+  .linkbtn{border:none;background:none;padding:0;color:var(--water);font-size:14px;font-family:inherit;text-decoration:underline;cursor:pointer}
+  .placebox{border:1px solid var(--line);border-radius:10px;padding:12px;margin:0 0 10px;background:#FAFCFA}
+  .placebox input{width:100%;padding:11px;border:1px solid var(--line);border-radius:9px;font-size:16px;font-family:inherit;margin-bottom:8px}
+  .placebox .addbtn{width:100%}
+  .plist{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .plist button{padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink);font-size:15px;font-family:inherit;text-align:left;cursor:pointer}
+  .pmsg{font-size:13px;color:var(--muted);margin:8px 0 0}
 
   .todo{background:var(--dry-bg);border:1px solid var(--dry-line);border-radius:var(--r);padding:14px;margin-bottom:18px}
   .todo p.label{color:var(--dry)}
@@ -97,6 +111,14 @@
   <div class="bar"><h1>水やりメモ</h1><span class="today" id="todayLabel"></span></div>
 
   <div class="box ask" id="wbox">
+    <p class="placeline" id="placeLine"></p>
+    <div class="placebox hide" id="placeBox">
+      <label class="label" for="placeInput">お住まいの市区町村</label>
+      <input type="text" id="placeInput" placeholder="例：大阪市　枚方市　高槻市">
+      <button class="addbtn" id="placeSearch">この場所をさがす</button>
+      <div class="plist" id="placeList"></div>
+      <p class="pmsg" id="placeMsg"></p>
+    </div>
     <p class="label">今日の天気は？</p>
     <div class="wbtns" id="wbtns"></div>
     <p class="wsay" id="wsay"></p>
@@ -170,18 +192,107 @@ function todayW(){return (S.weather&&S.weather.date===today())?S.weather.kind:nu
 function shiftFor(pot){var k=todayW();if(!k)return 0;
   return pot.where==='outdoor'?WEATHER[k].out:WEATHER[k].inn;}
 
+/* ===== 場所を覚えて、天気を自動で選ぶ ===== */
+var GEO='https://geocoding-api.open-meteo.com/v1/search';
+var FCST='https://api.open-meteo.com/v1/forecast';
+var wxBusy=false, wxErr=false;
+
+function openPlace(){
+  document.getElementById('placeBox').classList.remove('hide');
+  var i=document.getElementById('placeInput');
+  i.value=(S.place&&S.place.name)||''; i.focus();
+}
+function closePlace(){
+  document.getElementById('placeBox').classList.add('hide');
+  document.getElementById('placeList').innerHTML='';
+  document.getElementById('placeMsg').textContent='';
+}
+function searchPlace(){
+  var q=document.getElementById('placeInput').value.trim();
+  var list=document.getElementById('placeList'), msg=document.getElementById('placeMsg');
+  list.innerHTML='';
+  if(!q){msg.textContent='市区町村を入れてください。';return;}
+  msg.textContent='さがしています…';
+  fetch(GEO+'?name='+encodeURIComponent(q)+'&count=5&language=ja&format=json')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var a=(d&&d.results)||[];
+      if(!a.length){msg.textContent='見つかりませんでした。市の名前だけで試してみてください。';return;}
+      msg.textContent='この中から選んでください。';
+      a.forEach(function(g){
+        var b=document.createElement('button');
+        b.textContent=g.name+(g.admin1?'（'+g.admin1+'）':'');
+        b.onclick=function(){
+          S.place={name:g.name,lat:g.latitude,lon:g.longitude};
+          S.weather=null; wxErr=false; save(); closePlace(); fetchWeather(true);
+        };
+        list.appendChild(b);
+      });
+    })
+    .catch(function(){msg.textContent='つながりませんでした。電波のよい所でもう一度おためしください。';});
+}
+function pickKind(p,t){
+  if(p>=10)return 'heavy';
+  if(p>=3)return 'rain';
+  if(t>=30)return 'hot';
+  return 'fine';
+}
+function fetchWeather(force){
+  if(!S.place||wxBusy)return;
+  if(!force&&S.weather&&S.weather.date===today())return;
+  wxBusy=true; wxErr=false; renderWeather();
+  fetch(FCST+'?latitude='+S.place.lat+'&longitude='+S.place.lon
+    +'&daily=precipitation_sum,temperature_2m_max&timezone=auto&forecast_days=1')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var dd=d&&d.daily;
+      if(!dd||!dd.precipitation_sum||!dd.precipitation_sum.length)throw new Error('no data');
+      var p=Number(dd.precipitation_sum[0])||0, t=Number(dd.temperature_2m_max[0])||0;
+      S.weather={date:today(),kind:pickKind(p,t),auto:true,
+        note:'雨 '+p.toFixed(1)+'mm・最高 '+Math.round(t)+'℃'};
+      wxBusy=false; save(); renderAll();
+    })
+    .catch(function(){wxBusy=false; wxErr=true; renderWeather();});
+}
+
 function renderWeather(){
   var k=todayW(), box=document.getElementById('wbox'), btns=document.getElementById('wbtns');
+  var line=document.getElementById('placeLine'), auto=!!(S.weather&&S.weather.auto&&S.weather.date===today());
+  line.innerHTML='';
+  if(!S.place){
+    line.appendChild(document.createTextNode('お住まいの場所を入れておくと、天気を自動で選びます。'));
+    var b0=document.createElement('button'); b0.className='linkbtn'; b0.textContent='場所を入れる';
+    b0.onclick=openPlace; line.appendChild(b0);
+  }else{
+    if(wxBusy){
+      line.appendChild(document.createTextNode('天気を調べています…'));
+    }else{
+      var nm=document.createElement('b'); nm.textContent=S.place.name; line.appendChild(nm);
+      line.appendChild(document.createTextNode(auto?' の天気から自動で選びました。':'（手で選んだ天気を使っています）'));
+    }
+    var b1=document.createElement('button'); b1.className='linkbtn'; b1.textContent='場所を変える';
+    b1.onclick=openPlace; line.appendChild(b1);
+    if(!wxBusy&&!auto){
+      var b2=document.createElement('button'); b2.className='linkbtn'; b2.textContent='自動に戻す';
+      b2.onclick=function(){fetchWeather(true);}; line.appendChild(b2);
+    }
+  }
   btns.innerHTML='';
   Object.keys(WEATHER).forEach(function(key){
     var b=document.createElement('button');
     b.className='wbtn'+(k===key?' on':''); b.textContent=WEATHER[key].label;
-    b.onclick=function(){S.weather={date:today(),kind:key};save();renderAll();};
+    b.onclick=function(){S.weather={date:today(),kind:key,auto:false};save();renderAll();};
     btns.appendChild(b);
   });
   box.className='box'+(k?'':' ask');
-  document.getElementById('wsay').textContent=k?WEATHER[k].say:'';
+  var say=k?WEATHER[k].say:'';
+  if(k&&auto&&S.weather.note)say+='（'+S.weather.note+'）';
+  if(wxErr)say=(k?say+' ':'')+'※天気を取れませんでした。下から選んでください。';
+  document.getElementById('wsay').textContent=say;
 }
+document.getElementById('placeSearch').onclick=searchPlace;
+document.getElementById('placeInput').addEventListener('keydown',function(e){
+  if(e.key==='Enter'){e.preventDefault();searchPlace();}});
 
 /* ===== 状態 ===== */
 function stat(pot){
@@ -510,6 +621,7 @@ document.getElementById('fileIn').addEventListener('change',function(e){
 
 renderAll();
 renderNewBox();
+fetchWeather(false);
 </script>
 </body>
 </html>

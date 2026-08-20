@@ -1,0 +1,24 @@
+{
+  "name": "水やりメモ",
+  "short_name": "水やり",
+  "description": "鉢ごとに前回の水やりから何日空いたかが一目で分かるメモ",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EDF1EC",
+  "theme_color": "#2E6F8E",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
