@@ -104,6 +104,32 @@
   :focus-visible{outline:3px solid var(--water);outline-offset:2px}
   .hide{display:none}
 
+  /* ===== 肥料・活力剤 ===== */
+  .fert{margin-top:12px;border-top:1px dashed var(--line);padding-top:8px}
+  .frow{display:flex;align-items:center;gap:8px;padding:6px 0}
+  .finfo{flex:1;min-width:0}
+  .finfo .fbadge{margin-top:3px}
+  .fname{font-size:15px;font-weight:600}
+  .ftag{display:inline-block;font-size:11px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--soil);color:var(--soil);margin-left:4px;vertical-align:2px;font-weight:400}
+  .ftag.vit{border-color:var(--done);color:var(--done)}
+  .fbadge{display:inline-block;font-size:13px;font-weight:600;padding:1px 10px;border-radius:999px;background:#E3EEF3;color:var(--water)}
+  .fbadge.due,.fbadge.none{background:var(--dry-bg);color:var(--dry);border:1px solid var(--dry-line)}
+  .fbadge.soon{background:#E3EEF3;color:var(--water);border:1px dashed var(--water)}
+  .fbadge.done{background:var(--done-bg);color:var(--done)}
+  .fbtns{margin-left:auto;display:flex;gap:6px;flex-shrink:0}
+  .fbtns .mini{padding:6px 12px;font-size:14px}
+  .fbtns .undo{padding:6px 10px;font-size:13px}
+  .fitem{background:#fff;border:1px solid var(--line);border-radius:9px;padding:9px 10px;margin-bottom:8px}
+  .fline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0;font-size:14px}
+  .fline input[type=number]{width:80px}
+  .fhint{font-size:12px;color:var(--muted)}
+  .frest{font-size:12px;color:var(--muted);margin:3px 0 0}
+  .fmemo{font-size:13px;color:var(--muted);line-height:1.6;margin:4px 0 6px;white-space:pre-line}
+  input[type=number],textarea{font-family:inherit;font-size:16px;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)}
+  textarea{width:100%;font-size:14px;line-height:1.6}
+  .todo .tsub{font-size:14px;font-weight:600;color:var(--dry);margin:10px 0 0;border-top:1px solid var(--dry-line);padding-top:8px}
+  .todo .tsub.first{border-top:none;padding-top:0;margin-top:2px}
+
   /* ===== 控え（バックアップ） ===== */
   .bkremind{background:var(--dry-bg);border:1px solid var(--dry-line);border-radius:var(--r);padding:12px 40px 12px 14px;margin-bottom:14px;font-size:15px;position:relative}
   .bkremind p{margin:0 0 8px}
@@ -360,11 +386,16 @@ function renderTodo(){
   var soon=all.filter(function(x){return x.s.kind==='wait'&&x.s.left===1;});
   var rows=due.concat(none);
 
+  /* 肥料を登録した鉢が1つも無ければ、今までどおり水やりだけを出す */
+  var anyFert=S.pots.some(function(p){return p.ferts&&p.ferts.length;});
+  var frows=anyFert?fertTodoRows():[];
+
   var html='<div class="todo"><p class="label">今日あげる鉢'+
-    (rows.length?'（'+rows.length+'つ）':'')+'</p>';
+    (!anyFert&&rows.length?'（'+rows.length+'つ）':'')+'</p>';
+  if(anyFert)html+='<p class="tsub first">水やり'+(rows.length?'（'+rows.length+'つ）':'')+'</p>';
 
   if(rows.length===0){
-    html+='<p class="rest">今日はお休みで大丈夫です。</p>';
+    html+='<p class="rest">'+(anyFert?'水やりは、今日はお休みで大丈夫です。':'今日はお休みで大丈夫です。')+'</p>';
   }else{
     rows.forEach(function(x){
       var note=(x.s.kind==='none')?'まだ記録がありません':'前回から'+x.s.days+'日';
@@ -377,6 +408,18 @@ function renderTodo(){
   if(soon.length>0){
     html+='<p class="wsay">明日は '+soon.length+' つあげる日です。</p>';
   }
+  if(anyFert){
+    html+='<p class="tsub">肥料・活力剤'+(frows.length?'（'+frows.length+'つ）':'')+'</p>';
+    if(frows.length===0) html+='<p class="rest">今日あげる肥料・活力剤はありません。</p>';
+    var resting=S.pots.some(function(p){return (p.ferts||[]).some(fertResting);});
+    frows.forEach(function(x){
+      var note=(x.s.kind==='none')?'まだ記録がありません':'前回から'+x.s.days+'日';
+      html+='<div class="todo-row"><div><span class="todo-name"></span>'+
+        '<span class="todo-since">'+esc(FERTS[x.f.kind].name)+fertTags(x.f.kind)+'・'+note+'</span></div>'+
+        '<button class="mini" data-fgo="'+x.p.id+'|'+x.f.id+'">あげた</button></div>';
+    });
+    if(resting) html+='<p class="frest">'+WINTER_NOTE+'</p>';
+  }
   if(!todayW()){
     html+='<p class="wsay">天気を選ぶと、雨や暑さに合わせて調整します。</p>';
   }
@@ -384,7 +427,115 @@ function renderTodo(){
 
   el.innerHTML=html;
   var names=el.querySelectorAll('.todo-name');
-  rows.forEach(function(x,i){if(names[i])names[i].textContent=x.p.name;});
+  rows.concat(frows).forEach(function(x,i){if(names[i])names[i].textContent=x.p.name;});
+}
+
+/* ===== 肥料・活力剤 ===== */
+/* 間隔の目安(days)は、製品の公式情報・ラベルの記載から。分からないものは null（自分で入れる）。
+   memo は鉢ごとの詳細表示の初期値（使用量・うすめ方）。登録したあとは、鉢ごとに書き換えられる。 */
+var FERTS={
+  hyponex:{name:'ハイポネックス原液',tags:['肥料'],days:7,
+    memo:'液体肥料。水でうすめて、鉢底から流れ出る程度に与える。\n鉢花・観葉植物など：500〜1000倍（水10Lに10〜20mL）で1週間に1回。\nサボテン・山野草・盆栽など：2000倍（水10Lに5mL）で2週間に1回。\n植えつけ・植えかえ時は、2〜3週間後から。'},
+  allpurpose:{name:'オール・パーパス',tags:['肥料'],days:200,
+    memo:'アムグロー ファーティコート。緩効性被覆肥料。施肥1回で1シーズン（200日以上）持続。\n使用量：5号鉢7.5g、6号鉢12g、プランター（40cm）30g。\n植え付け・植え替え時に用土へ混ぜ込むか、表面に置く。'},
+  harvest:{name:'ハーベスト',tags:['活力剤','肥料'],days:21,
+    memo:'アムグロー Organix Harvest。オーガニック100%の活力剤＋液体肥料。\n植物の成長期には月に1〜2回（14〜30日おき）。\n水10Lにキャップ1杯（約48mL）でうすめる（約200倍）。\nセントポーリアや多肉植物等は、あまり肥料を必要としない。'},
+  organic:{name:'有機肥料',tags:['肥料'],days:null,noneHint:'袋の記載を見て入れてください',
+    memo:'置き肥など、固形の有機肥料。製品によって効く期間がちがうので、間隔は袋の記載を見て入れる。'},
+  liquidus:{name:'リキダス',tags:['活力剤'],days:7,
+    memo:'活力液（肥料ではないので、肥料は別に与える）。水でうすめて株元へ、鉢底から流れ出る程度に。\n鉢花・観葉植物など（根付いた後）：200倍（水2Lに10mL＝キャップ1/2）で1週間に1回。\n洋ラン・サボテン・多肉植物・盆栽：1000倍で1週間に1回。'},
+  menedael:{name:'メネデール',tags:['活力剤'],days:null,noneHint:'植え付けのあとや弱った時など、使う時に入れてください',
+    memo:'活力素。100倍にうすめて使う。\n植え付けのあと：100倍液で水やりし、その後は週に1度程度で3〜4回。\n弱ってきた時：週に1度程度、100倍液で水やりするか、スプレーする。'}
+};
+var FERT_GROUPS=[['肥料',['hyponex','allpurpose','organic']],['活力剤',['liquidus','menedael']],['活力剤＋肥料',['harvest']]];
+
+function fertTags(kind){
+  return FERTS[kind].tags.map(function(t){return '<span class="ftag'+(t==='活力剤'?' vit':'')+'">'+t+'</span>';}).join('');
+}
+/* 冬（12〜2月）は、種類が「肥料」のもの（「活力剤＋肥料」のハーベストも）のバッジと「今日あげる」を出さない。
+   登録と記録はそのまま残す。活力剤だけのもの（リキダス・メネデール）は通年どおり。 */
+var WINTER_NOTE='冬は肥料をお休み中（3月から再開）';
+function isWinter(){var m=new Date().getMonth()+1;return m===12||m<=2;}
+function fertResting(f){return isWinter()&&FERTS[f.kind].tags.indexOf('肥料')>=0;}
+function fertStat(f){
+  var days=f.last?diff(f.last,today()):null, left=days===null?null:f.interval-days;
+  var kind=days===null?'none':(days===0?'done':(left<=0?'due':(left===1?'soon':'wait')));
+  return {days:days,left:left,kind:kind};
+}
+function fertBadge(s){
+  if(s.kind==='none')return '<span class="fbadge none">まだ記録がありません</span>';
+  if(s.kind==='done')return '<span class="fbadge done">今日あげました</span>';
+  if(s.kind==='due')return '<span class="fbadge due">今日あげる'+(s.left<0?'（'+(-s.left)+'日すぎ）':'')+'</span>';
+  if(s.kind==='soon')return '<span class="fbadge soon">そろそろ（明日）</span>';
+  return '<span class="fbadge">あと '+s.left+' 日</span>';
+}
+function fertTodoRows(){
+  var out=[];
+  S.pots.forEach(function(p){(p.ferts||[]).forEach(function(f){
+    if(fertResting(f))return;
+    var s=fertStat(f); if(s.kind==='due'||s.kind==='none')out.push({p:p,f:f,s:s});
+  });});
+  return out;
+}
+/* 鉢のカード：肥料を1つも登録していない鉢には何も出さない */
+function fertBlock(p){
+  if(!p.ferts||!p.ferts.length)return '';
+  return '<div class="fert">'+p.ferts.map(function(f){
+    var s=fertStat(f), key=p.id+'|'+f.id;
+    if(fertResting(f))
+      return '<div class="frow"><div class="finfo"><div><span class="fname">'+esc(FERTS[f.kind].name)+'</span>'+fertTags(f.kind)+'</div>'+
+        '<p class="frest">'+WINTER_NOTE+'</p></div></div>';
+    return '<div class="frow"><div class="finfo"><div><span class="fname">'+esc(FERTS[f.kind].name)+'</span>'+fertTags(f.kind)+'</div>'+fertBadge(s)+'</div>'+
+      '<div class="fbtns">'+(s.kind==='done'?'':'<button class="mini" data-fgo="'+key+'">あげた</button>')+
+      (f.prev!==undefined?'<button class="undo" data-fundo="'+key+'">1回戻す</button>':'')+'</div></div>';
+  }).join('')+'</div>';
+}
+function fertHint(kind){
+  var d=FERTS[kind].days;
+  return d?'（目安 '+d+'日おき。自分で変えられます）':'（目安はありません。'+FERTS[kind].noneHint+'）';
+}
+/* 鉢の「直す」の中：登録した肥料の間隔・メモの変更と外す、新しい肥料の登録 */
+function fertEdit(p){
+  var items=(p.ferts||[]).map(function(f){
+    var key=p.id+'|'+f.id;
+    return '<div class="fitem"><div><span class="fname">'+esc(FERTS[f.kind].name)+'</span>'+fertTags(f.kind)+'</div>'+
+      '<div class="fline"><input type="number" min="1" max="999" step="1" inputmode="numeric" data-fint="'+key+'" value="'+f.interval+'"> 日おき'+
+      '<span class="fhint">'+fertHint(f.kind)+'</span></div>'+
+      '<textarea rows="4" data-fmemo="'+key+'" aria-label="メモ（使用量・うすめ方など）">'+esc(f.memo||'')+'</textarea>'+
+      '<button class="del" data-fdel="'+key+'">この肥料を外す</button></div>';
+  }).join('');
+  var first='hyponex';
+  var opts=FERT_GROUPS.map(function(g){
+    return '<optgroup label="'+g[0]+'">'+g[1].map(function(k){return '<option value="'+k+'">'+esc(FERTS[k].name)+'</option>';}).join('')+'</optgroup>';
+  }).join('');
+  return '<div class="field"><label>肥料・活力剤</label>'+items+
+    '<div class="fitem"><select data-fkind="'+p.id+'">'+opts+'</select>'+
+      '<div class="fline"><input type="number" min="1" max="999" step="1" inputmode="numeric" data-fnewint="'+p.id+'" value="'+FERTS[first].days+'"> 日おき'+
+      '<span class="fhint" data-fnewhint="'+p.id+'">'+fertHint(first)+'</span></div>'+
+      '<p class="fmemo" data-fnewmemo="'+p.id+'">'+esc(FERTS[first].memo)+'</p>'+
+      '<span class="photo-btn" data-fadd="'+p.id+'">この肥料を登録する</span>'+
+      '<p class="ai-err" data-fnewerr="'+p.id+'"></p></div></div>';
+}
+function findFert(key){
+  var a=key.split('|'), p=find(a[0]); if(!p||!p.ferts)return null;
+  var f=p.ferts.filter(function(x){return x.id===a[1];})[0];
+  return f?{p:p,f:f}:null;
+}
+function newFertId(p){
+  var id='f'+Date.now(), used={};
+  (p.ferts||[]).forEach(function(f){used[f.id]=true;});
+  while(used[id])id=id+'x';
+  return id;
+}
+function addFert(pid,card){
+  var p=find(pid); if(!p)return;
+  var kind=card.querySelector('[data-fkind]').value, err=card.querySelector('[data-fnewerr]');
+  var n=Number(card.querySelector('[data-fnewint]').value);
+  if(!FERTS[kind])return;
+  if(!(n>=1&&n<=999&&Math.floor(n)===n)){err.textContent='間隔（何日おきか）を、1〜999の数字で入れてください。';return;}
+  if(!p.ferts)p.ferts=[];
+  p.ferts.push({id:newFertId(p),kind:kind,interval:n,memo:FERTS[kind].memo});
+  save(); renderAll();
 }
 
 /* ===== 鉢一覧 ===== */
@@ -424,6 +575,7 @@ function renderPots(){
           '<div class="field"><label>水やりの間隔</label><select data-int="'+p.id+'">'+
             [1,2,3,4,5,6,7,10,14,21].map(function(v){return '<option value="'+v+'"'+(p.interval===v?' selected':'')+'>'+v+'日おき</option>';}).join('')+
           '</select></div>'+
+          fertEdit(p)+
           '<div class="field"><label>写真</label><span class="photo-btn" data-photo="'+p.id+'">'+(p.photo?'撮り直す':'写真をつける')+'</span></div>'+
           '<div class="field"><label>名前しらべ</label>'+
             (p.photo
@@ -438,7 +590,7 @@ function renderPots(){
       '<div class="acts">'+
         (s.kind==='done'?'<span class="go fin">済み</span>':'<button class="go" data-go="'+p.id+'">水をあげた</button>')+
         (p.prev!==undefined?'<button class="undo" data-undo="'+p.id+'">1回戻す</button>':'')+
-      '</div>';
+      '</div>'+fertBlock(p);
     el.querySelector('.name').textContent=p.name;
     var ni=el.querySelector('[data-name]'); if(ni)ni.value=p.name;
     box.appendChild(el);
@@ -523,6 +675,12 @@ document.body.addEventListener('click',function(e){
   else if((v=t.getAttribute('data-del'))){var p3=find(v);
     if(confirm('「'+p3.name+'」を消します。よろしいですか。')){S.pots=S.pots.filter(function(q){return q.id!==v;});editing=null;save();renderAll();}}
   else if((v=t.getAttribute('data-photo'))){photoTarget=v;document.getElementById('fileIn').click();}
+  else if((v=t.getAttribute('data-fgo'))){var x=findFert(v);if(x){x.f.prev=(x.f.last===undefined?null:x.f.last);x.f.last=today();save();renderAll();}}
+  else if((v=t.getAttribute('data-fundo'))){var x2=findFert(v);if(x2){if(x2.f.prev===null)delete x2.f.last;else x2.f.last=x2.f.prev;delete x2.f.prev;save();renderAll();}}
+  else if((v=t.getAttribute('data-fdel'))){var x3=findFert(v);
+    if(x3&&confirm('「'+FERTS[x3.f.kind].name+'」をこの鉢から外します。よろしいですか。')){x3.p.ferts=x3.p.ferts.filter(function(f){return f!==x3.f;});
+      if(!x3.p.ferts.length)delete x3.p.ferts;save();renderAll();}}
+  else if((v=t.getAttribute('data-fadd'))){addFert(v,t.closest('.pot'));}
   else if((v=t.getAttribute('data-ai'))){askAI(v);}
   else if((v=t.getAttribute('data-ain'))){askAIName(v);}
   else if((v=t.getAttribute('data-aiuse'))){var p4=find(v);
@@ -533,9 +691,24 @@ document.body.addEventListener('click',function(e){
 
 document.body.addEventListener('change',function(e){
   var v=e.target.getAttribute&&e.target.getAttribute('data-int');
-  if(v){find(v).interval=Number(e.target.value);save();renderAll();}
+  if(v){find(v).interval=Number(e.target.value);save();renderAll();return;}
+  var fk=e.target.getAttribute&&e.target.getAttribute('data-fkind');
+  if(fk){ /* 種類を選び直したら、目安の間隔とメモを入れ直す（まだ保存はしない） */
+    var card=e.target.closest('.pot'), k=e.target.value;
+    card.querySelector('[data-fnewint]').value=FERTS[k].days||'';
+    card.querySelector('[data-fnewhint]').textContent=fertHint(k);
+    card.querySelector('[data-fnewmemo]').textContent=FERTS[k].memo;
+    card.querySelector('[data-fnewerr]').textContent='';
+    return;
+  }
+  var fi=e.target.getAttribute&&e.target.getAttribute('data-fint');
+  if(fi){var x=findFert(fi), n=Number(e.target.value);
+    if(x&&n>=1&&n<=999&&Math.floor(n)===n){x.f.interval=n;save();}
+    renderAll();}
 });
 document.body.addEventListener('input',function(e){
+  var fm=e.target.getAttribute&&e.target.getAttribute('data-fmemo');
+  if(fm){var x=findFert(fm); if(x){x.f.memo=e.target.value.slice(0,1000);save();} return;}
   var v=e.target.getAttribute&&e.target.getAttribute('data-name');
   if(v){find(v).name=e.target.value;save();
     var card=e.target.closest('.pot'); if(card)card.querySelector('.name').textContent=e.target.value;
@@ -661,7 +834,7 @@ document.getElementById('fileIn').addEventListener('change',function(e){
 /* ===== 控え（バックアップ） ===== */
 /* 控えファイルの形式。中身の形を変えるときは BK_FORMAT_VERSION を上げ、
    bkValidate() で古い版も読めるようにする（古い控えが読めなくならないように）。 */
-var APP_VERSION='2026.10.16';
+var APP_VERSION='2026.10.16-2'; /* 肥料・活力剤を追加 */
 var BK_FORMAT='mizuyari-backup', BK_FORMAT_VERSION=1, BK_REMIND_DAYS=14, BK_MAX_BYTES=50*1024*1024;
 /* 既存のキー mizuyari-v1 はそのままにして、控えのためにこの2つだけを新しく使う */
 var BK_LAST_KEY='mizuyari-v1-lastBackupAt', BK_BEFORE_KEY='mizuyari-v1-beforeImport';
@@ -725,13 +898,27 @@ function bkValidate(o){
   if(o.formatVersion>BK_FORMAT_VERSION)return {error:'このアプリより新しい版で書き出された控えのため、読み込めません。ページを読み込み直して、アプリを新しくしてからお試しください。'};
   var d=o.data;
   if(!d||typeof d!=='object'||!Array.isArray(d.pots))return {error:'控えの中身が欠けているようです（鉢の一覧がありません）。別の控えファイルでお試しください。'};
+  /* id は画面の部品にそのまま埋め込むので、英数字と - _ だけを受け付ける。写真も、画像の文字の形だけ。 */
+  var ID=/^[A-Za-z0-9_-]{1,64}$/, DATE=/^\d{4}-\d{2}-\d{2}$/, PHOTO=/^data:image\/[a-z+]+;base64,[A-Za-z0-9+\/=]+$/;
   for(var i=0;i<d.pots.length;i++){
     var p=d.pots[i];
-    var ok=p&&typeof p==='object'&&!Array.isArray(p)&&typeof p.id==='string'&&p.id!==''&&
+    var ok=p&&typeof p==='object'&&!Array.isArray(p)&&typeof p.id==='string'&&ID.test(p.id)&&
       typeof p.name==='string'&&typeof p.interval==='number'&&isFinite(p.interval)&&p.interval>0&&
-      (p.photo===undefined||(typeof p.photo==='string'&&p.photo.indexOf('data:image/')===0))&&
-      (p.last===undefined||(typeof p.last==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(p.last)));
+      (p.photo===undefined||(typeof p.photo==='string'&&PHOTO.test(p.photo)))&&
+      (p.last===undefined||(typeof p.last==='string'&&DATE.test(p.last)));
     if(!ok)return {error:'控えの中身が壊れているようです（'+(i+1)+'つめの鉢）。別の控えファイルでお試しください。'};
+    /* 肥料（ferts）は無くてもよい（肥料を入れる前の控え）。あるときは中身まで確かめる */
+    if(p.ferts!==undefined){
+      var fok=Array.isArray(p.ferts)&&p.ferts.every(function(f){
+        return f&&typeof f==='object'&&!Array.isArray(f)&&typeof f.id==='string'&&ID.test(f.id)&&
+          Object.prototype.hasOwnProperty.call(FERTS,f.kind)&&
+          typeof f.interval==='number'&&Math.floor(f.interval)===f.interval&&f.interval>=1&&f.interval<=999&&
+          (f.last===undefined||(typeof f.last==='string'&&DATE.test(f.last)))&&
+          (f.prev===undefined||f.prev===null||(typeof f.prev==='string'&&DATE.test(f.prev)))&&
+          (f.memo===undefined||typeof f.memo==='string');
+      });
+      if(!fok)return {error:'控えの中身が壊れているようです（'+(i+1)+'つめの鉢の肥料）。別の控えファイルでお試しください。'};
+    }
   }
   if(d.place!==undefined&&d.place!==null&&!(typeof d.place==='object'&&typeof d.place.name==='string'&&
     isFinite(Number(d.place.lat))&&isFinite(Number(d.place.lon))))
