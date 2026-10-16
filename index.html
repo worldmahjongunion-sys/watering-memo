@@ -103,12 +103,32 @@
   .note{text-align:center;color:var(--muted);font-size:13px;margin-top:22px;line-height:1.8}
   :focus-visible{outline:3px solid var(--water);outline-offset:2px}
   .hide{display:none}
+
+  /* ===== 控え（バックアップ） ===== */
+  .bkremind{background:var(--dry-bg);border:1px solid var(--dry-line);border-radius:var(--r);padding:12px 40px 12px 14px;margin-bottom:14px;font-size:15px;position:relative}
+  .bkremind p{margin:0 0 8px}
+  .bkremind .x{position:absolute;top:6px;right:8px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px 8px;font-family:inherit}
+  .bk h2{font-family:"Hiragino Mincho ProN","Yu Mincho","Noto Serif JP",serif;font-size:17px;margin:0 0 6px;font-weight:600}
+  .bk .desc{font-size:14px;color:var(--muted);margin:0 0 10px}
+  .bk .addbtn{margin-top:8px}
+  .bk .sub2{width:100%;padding:12px;border:1px solid var(--soil);border-radius:11px;background:#fff;color:var(--soil);font-size:16px;font-weight:600;font-family:inherit;cursor:pointer;margin-top:8px}
+  .bk .info{font-size:13px;color:var(--muted);margin:6px 0 0}
+  .bk .choice{background:var(--dry-bg);border:1px solid var(--dry-line);border-radius:10px;padding:12px;margin-top:10px;font-size:14px}
+  .bk .choice p{margin:0;white-space:pre-line}
+  .bk .err{color:#B3261E;font-size:14px;margin:8px 0 0}
+  .bk .ok{color:var(--done);font-size:14px;margin:8px 0 0}
 </style>
 </head>
 <body>
 <div class="wrap">
 
   <div class="bar"><h1>水やりメモ</h1><span class="today" id="todayLabel"></span></div>
+
+  <div class="bkremind hide" id="bkRemind">
+    <p id="bkRemindText"></p>
+    <button class="mini" id="bkRemindBtn">控えを書き出す</button>
+    <button class="x" id="bkRemindClose" aria-label="閉じる">×</button>
+  </div>
 
   <div class="box ask" id="wbox">
     <p class="placeline" id="placeLine"></p>
@@ -153,6 +173,24 @@
     <button class="addbtn" id="addBtn">増やす</button>
   </div>
 
+  <div class="box bk" id="bkBox">
+    <h2>データの控え（バックアップ）</h2>
+    <p class="desc">鉢・写真・場所などを、1つのファイルにまとめてスマホに保存します。スマホのデータ消去などで消えてしまっても、このファイルを読み込めば元に戻せます。</p>
+    <button class="addbtn" id="bkExport">控えを書き出す</button>
+    <p class="info" id="bkLast"></p>
+    <button class="sub2" id="bkImport">控えを読み込む</button>
+    <div class="choice hide" id="bkChoice">
+      <p id="bkChoiceText"></p>
+      <button class="addbtn" id="bkMerge">今のデータに追加する</button>
+      <button class="sub2" id="bkOverwrite">上書きする</button>
+      <button class="sub2" id="bkCancel">やめる</button>
+    </div>
+    <p class="err" id="bkErr"></p>
+    <p class="ok" id="bkOk"></p>
+    <button class="sub2 hide" id="bkUndo">読み込む前の状態に戻す</button>
+    <p class="info" id="bkUndoInfo"></p>
+  </div>
+
   <p class="note">
     記録はこの端末の中だけに残ります。<br>
     「直す」から、名前・置き場所・間隔・写真をいつでも変えられます。
@@ -160,6 +198,7 @@
 </div>
 
 <input type="file" id="fileIn" accept="image/*" capture="environment" class="hide">
+<input type="file" id="bkFile" class="hide">
 
 <script>
 /* ===== 保存 ===== */
@@ -470,7 +509,7 @@ function askAI(id){
   });
 }
 
-function renderAll(){renderWeather();renderTodo();renderPots();}
+function renderAll(){renderWeather();renderTodo();renderPots();bkRender();}
 
 /* ===== 操作 ===== */
 function find(id){return S.pots.filter(function(p){return p.id===id;})[0];}
@@ -619,9 +658,198 @@ document.getElementById('fileIn').addEventListener('change',function(e){
   fr.readAsDataURL(f);
 });
 
+/* ===== 控え（バックアップ） ===== */
+/* 控えファイルの形式。中身の形を変えるときは BK_FORMAT_VERSION を上げ、
+   bkValidate() で古い版も読めるようにする（古い控えが読めなくならないように）。 */
+var APP_VERSION='2026.10.16';
+var BK_FORMAT='mizuyari-backup', BK_FORMAT_VERSION=1, BK_REMIND_DAYS=14, BK_MAX_BYTES=50*1024*1024;
+/* 既存のキー mizuyari-v1 はそのままにして、控えのためにこの2つだけを新しく使う */
+var BK_LAST_KEY='mizuyari-v1-lastBackupAt', BK_BEFORE_KEY='mizuyari-v1-beforeImport';
+var bkLastMem=null, bkDismissed=false, bkPending=null;
+var BK_UNCHANGED='（今のデータは変更していません）';
+
+function bkGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function pad2(n){return String(n).padStart(2,'0');}
+function bkWhen(iso){var d=new Date(iso);if(isNaN(d.getTime()))return '';
+  return d.getFullYear()+'/'+(d.getMonth()+1)+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());}
+function bkSize(n){return n>=1024*1024?(n/1024/1024).toFixed(1)+' MB':Math.max(1,Math.round(n/1024))+' KB';}
+function bkCount(d){var ph=d.pots.filter(function(p){return !!p.photo;}).length;
+  return '鉢 '+d.pots.length+'つ（写真つき '+ph+'つ）'+(d.place&&d.place.name?'・場所「'+d.place.name+'」':'');}
+function bkMsg(err,ok){document.getElementById('bkErr').textContent=err||'';document.getElementById('bkOk').textContent=ok||'';}
+function bkBuild(){return {format:BK_FORMAT,formatVersion:BK_FORMAT_VERSION,appVersion:APP_VERSION,
+  exportedAt:new Date().toISOString(),key:KEY,data:S};}
+
+function bkLastAt(){
+  var a=[bkGet(BK_LAST_KEY),bkLastMem].filter(function(v){return v&&!isNaN(new Date(v).getTime());});
+  if(!a.length)return null;
+  return a.sort(function(x,y){return new Date(y)-new Date(x);})[0];
+}
+function bkSetLast(iso){bkLastMem=iso;try{localStorage.setItem(BK_LAST_KEY,iso);}catch(e){}}
+
+/* 書き出し日時・画面上部の案内・「読み込む前の状態に戻す」を、今の状態に合わせて出し直す */
+function bkRender(){
+  var last=bkLastAt();
+  document.getElementById('bkLast').textContent=last?'最後に書き出した日時：'+bkWhen(last):'まだ一度も書き出していません';
+  var days=last?Math.floor((Date.now()-new Date(last).getTime())/86400000):null;
+  /* 鉢が無いときは、書き出し日時も一緒に消えている可能性があるので案内しない */
+  var need=S.pots.length>0&&!bkDismissed&&(days===null||days>=BK_REMIND_DAYS);
+  document.getElementById('bkRemindText').textContent=days===null
+    ?'まだ一度も控えを書き出していません。スマホのデータ消去などで鉢が消えても戻せるよう、控えを書き出しましょう。'
+    :'最後に控えを書き出してから'+days+'日たちました。控えを書き出しましょう。';
+  document.getElementById('bkRemind').classList.toggle('hide',!need);
+
+  /* 読み込む前に鉢が無かった場合は、戻すと読み込んだ鉢が消えるだけなのでボタンを出さない */
+  var b=bkReadBefore(), has=!!(b&&b.data.pots.length);
+  document.getElementById('bkUndo').classList.toggle('hide',!has);
+  document.getElementById('bkUndoInfo').textContent=has?bkWhen(b.exportedAt)+'に読み込む前の状態（'+bkCount(b.data)+'）を1回分だけ取ってあります':'';
+}
+
+function bkExport(){
+  var b=bkBuild(), name='水やりメモ_バックアップ_'+today()+'.json', blob;
+  try{
+    blob=new Blob([JSON.stringify(b)],{type:'application/json'});
+    var url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},60000);
+  }catch(e){bkMsg('控えを書き出せませんでした。時間をおいてもう一度お試しください。','');return;}
+  bkSetLast(b.exportedAt);
+  bkMsg('','控えを書き出しました（'+name+'・'+bkSize(blob.size)+'）。スマホの「ダウンロード」に保存されます。LINEの自分あてのトークやGoogleドライブなど、スマホの外にも置いておくと安心です。');
+  bkRender();
+}
+
+/* 控えファイルの中身が正しい形かを確かめる。正しくなければ {error} を返し、何も変更しない。 */
+function bkValidate(o){
+  var NOT='このファイルは、水やりメモの控えではないようです。「控えを書き出す」で作ったファイルを選んでください。';
+  if(!o||typeof o!=='object'||Array.isArray(o)||o.format!==BK_FORMAT)return {error:NOT};
+  if(typeof o.formatVersion!=='number'||Math.floor(o.formatVersion)!==o.formatVersion||o.formatVersion<1)return {error:NOT};
+  if(o.formatVersion>BK_FORMAT_VERSION)return {error:'このアプリより新しい版で書き出された控えのため、読み込めません。ページを読み込み直して、アプリを新しくしてからお試しください。'};
+  var d=o.data;
+  if(!d||typeof d!=='object'||!Array.isArray(d.pots))return {error:'控えの中身が欠けているようです（鉢の一覧がありません）。別の控えファイルでお試しください。'};
+  for(var i=0;i<d.pots.length;i++){
+    var p=d.pots[i];
+    var ok=p&&typeof p==='object'&&!Array.isArray(p)&&typeof p.id==='string'&&p.id!==''&&
+      typeof p.name==='string'&&typeof p.interval==='number'&&isFinite(p.interval)&&p.interval>0&&
+      (p.photo===undefined||(typeof p.photo==='string'&&p.photo.indexOf('data:image/')===0))&&
+      (p.last===undefined||(typeof p.last==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(p.last)));
+    if(!ok)return {error:'控えの中身が壊れているようです（'+(i+1)+'つめの鉢）。別の控えファイルでお試しください。'};
+  }
+  if(d.place!==undefined&&d.place!==null&&!(typeof d.place==='object'&&typeof d.place.name==='string'&&
+    isFinite(Number(d.place.lat))&&isFinite(Number(d.place.lon))))
+    return {error:'控えの中身が壊れているようです（場所の設定）。別の控えファイルでお試しください。'};
+  if(d.weather!==undefined&&d.weather!==null&&!(typeof d.weather==='object'&&typeof d.weather.date==='string'&&WEATHER[d.weather.kind]))
+    return {error:'控えの中身が壊れているようです（天気の設定）。別の控えファイルでお試しください。'};
+  return {data:d,exportedAt:typeof o.exportedAt==='string'?o.exportedAt:''};
+}
+
+function bkReadBefore(){
+  var r=bkGet(BK_BEFORE_KEY); if(!r)return null;
+  try{var v=bkValidate(JSON.parse(r));return v.error?null:v;}catch(e){return null;}
+}
+
+function bkCancel(){bkPending=null;document.getElementById('bkChoice').classList.add('hide');}
+
+document.getElementById('bkFile').addEventListener('change',function(){
+  var f=this.files&&this.files[0]; this.value=''; /* 同じファイルをもう一度選んでも反応するように */
+  bkCancel(); bkMsg('','');
+  if(!f)return;
+  if(f.size>BK_MAX_BYTES){bkMsg('ファイルが大きすぎるため、読み込めませんでした。水やりメモの控えファイルか確かめてください。'+BK_UNCHANGED,'');return;}
+  var fr=new FileReader();
+  fr.onload=function(){
+    var o;
+    try{o=JSON.parse(String(fr.result).replace(/^﻿/,''));}
+    catch(e){bkMsg('ファイルの形式が正しくないため、読み込めませんでした。「控えを書き出す」で作ったファイルを選んでください。'+BK_UNCHANGED,'');return;}
+    var v=bkValidate(o);
+    if(v.error){bkMsg(v.error+BK_UNCHANGED,'');return;}
+    bkPending=v;
+    /* 今の鉢が無ければ、失うものがないのでそのまま読み込む */
+    if(S.pots.length===0){bkApply('overwrite',true);return;}
+    var w=bkWhen(v.exportedAt);
+    document.getElementById('bkChoiceText').textContent='控え（'+(w?w+'に書き出し・':'')+bkCount(v.data)+'）を読み込みます。\n今のデータ（'+bkCount(S)+'）をどうしますか。';
+    document.getElementById('bkChoice').classList.remove('hide');
+  };
+  fr.onerror=function(){bkMsg('ファイルを開けませんでした。もう一度選び直してください。'+BK_UNCHANGED,'');};
+  fr.readAsText(f);
+});
+
+function bkApply(mode,skipConfirm){
+  var v=bkPending; if(!v)return;
+  if(mode==='overwrite'&&!skipConfirm&&
+    !confirm('今のデータ（鉢・写真・場所）をすべて消して、控えの内容に置き換えます。よろしいですか。\n\n読み込む前の状態は、「読み込む前の状態に戻す」で1回分だけ戻せます。'))return;
+  bkCancel();
+  bkImport(v,mode,false);
+}
+
+/* 「読み込む前の状態に戻す」: 取っておいた1回分で上書きする。今の状態は代わりに取っておくので、もう一度押せば戻る。 */
+function bkUndo(){
+  var b=bkReadBefore();
+  if(!b||!b.data.pots.length){bkMsg('戻せる状態が見つかりませんでした。','');bkRender();return;}
+  if(!confirm('読み込む前の状態（'+bkCount(b.data)+'）に戻します。よろしいですか。\n\n今のデータは、代わりに1回分だけ取っておきます。'))return;
+  bkCancel();
+  bkImport(b,'overwrite',true);
+}
+
+function bkImport(v,mode,isUndo){
+  /* 1. 今のデータを、別のキーに1回分だけ取っておく。取っておけなければ何もしない。 */
+  var snap=bkBuild();
+  try{localStorage.setItem(BK_BEFORE_KEY,JSON.stringify(snap));}
+  catch(e){bkMsg('読み込む前の状態を取っておけなかったため、読み込みを中止しました。端末の保存容量が足りない可能性があります（写真が多いと起きます）。'+BK_UNCHANGED,'');return;}
+
+  /* 2. 読み込む内容を組み立てる。「調べています…」の途中の印は持ち込まない */
+  var inc=JSON.parse(JSON.stringify(v.data)), next, added=0, skipped=0;
+  inc.pots.forEach(function(p){delete p.busy;});
+  if(mode==='merge'){
+    /* 追加は鉢だけ。場所・天気は今の設定のまま。idが同じ鉢は今のほうを残して読み飛ばす */
+    next=JSON.parse(JSON.stringify(S));
+    var ids={}; next.pots.forEach(function(p){ids[p.id]=true;});
+    inc.pots.forEach(function(p){if(ids[p.id]){skipped++;}else{ids[p.id]=true;next.pots.push(p);added++;}});
+  }else{
+    next=inc;
+  }
+
+  /* 3. 保存する。保存できなければ元に書き戻す */
+  var prevRaw=bkGet(KEY);
+  try{localStorage.setItem(KEY,JSON.stringify(next));}
+  catch(e){
+    try{if(prevRaw!==null)localStorage.setItem(KEY,prevRaw);}catch(e2){}
+    bkMsg('保存できなかったため、読み込みを中止しました。端末の保存容量が足りない可能性があります（写真が多いと起きます）。'+BK_UNCHANGED,'');
+    return;
+  }
+  S=next; mem=S; editing=null; wxErr=false;
+
+  /* 控えのファイルで丸ごと戻した場合は、そのファイルがある＝その時点の控えはある、とみなす */
+  if(mode==='overwrite'&&!isUndo&&v.exportedAt&&!isNaN(new Date(v.exportedAt).getTime())){
+    var last=bkLastAt(); if(!last||new Date(v.exportedAt)>new Date(last))bkSetLast(v.exportedAt);
+  }
+
+  var msg;
+  if(isUndo)msg='読み込む前の状態に戻しました。今は '+bkCount(S)+' です。';
+  else if(mode==='merge')msg='今のデータに追加しました（鉢 +'+added+'つ'+(skipped?'、すでにある'+skipped+'つは読み飛ばしました':'')+'）。今は '+bkCount(S)+' です。';
+  else msg='控えを読み込みました。今は '+bkCount(S)+' です。';
+  bkMsg('',msg);
+  renderAll(); bkRender();
+  fetchWeather(false); /* 起動時と同じく、場所があって今日の天気がまだなら自動で選ぶ */
+}
+
+/* 容量が足りないときにブラウザが自動でデータを消す対象から外してもらうよう頼む。
+   対応していないブラウザや断られた場合は何もしない（利用者自身が行う消去は防げない）。 */
+function bkPersist(){
+  try{if(navigator.storage&&typeof navigator.storage.persist==='function')navigator.storage.persist().catch(function(){});}catch(e){}
+}
+
+document.getElementById('bkExport').onclick=bkExport;
+document.getElementById('bkRemindBtn').onclick=bkExport;
+document.getElementById('bkRemindClose').onclick=function(){bkDismissed=true;bkRender();};
+document.getElementById('bkImport').onclick=function(){document.getElementById('bkFile').click();};
+document.getElementById('bkMerge').onclick=function(){bkApply('merge');};
+document.getElementById('bkOverwrite').onclick=function(){bkApply('overwrite');};
+document.getElementById('bkCancel').onclick=bkCancel;
+document.getElementById('bkUndo').onclick=bkUndo;
+
 renderAll();
 renderNewBox();
 fetchWeather(false);
+bkRender();
+bkPersist();
 </script>
 </body>
 </html>
